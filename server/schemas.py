@@ -8,16 +8,16 @@ class UserCreate(BaseModel):
     password: str
     name: str = Field(max_length=20)
 
+
 class MessageCreate(BaseModel):
     text: str
     dialog_id: int
 
 
-# schemas.py
 class UserResponse(BaseModel):
     user_id: int
     email: EmailStr
-    name: Optional[str] = None       
+    name: Optional[str] = None
     created_at: datetime
     class Config:
         orm_mode = True

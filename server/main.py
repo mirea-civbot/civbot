@@ -3,18 +3,23 @@ from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
 from database import async_session
 from typing import List, AsyncGenerator
-import crud, schemas, models, auth
+import crud
+import schemas
+import models
+from fastapi import status
+import auth
 from jose import JWTError, jwt
-from config import settings
+from app_config import settings
 
 app = FastAPI(debug=True)
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/login")
 
-# Dependency: асинхронная сессия БД
+
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
     async with async_session() as session:
         yield session
+
 
 async def get_current_user(
     token: str = Depends(oauth2_scheme),
@@ -40,7 +45,7 @@ async def get_current_user(
         raise credentials_exception
     return user
 
-# Регистрация
+
 @app.post("/register", response_model=schemas.UserResponse)
 async def register(
     user: schemas.UserCreate,
@@ -52,6 +57,8 @@ async def register(
     return await crud.create_user(db, user)
 
 # Логин -> выдача JWT
+
+
 @app.post("/login")
 async def login(
     form_data: OAuth2PasswordRequestForm = Depends(),
@@ -64,6 +71,8 @@ async def login(
     return {"access_token": token, "token_type": "bearer"}
 
 # Создать диалог (авторизованный пользователь)
+
+
 @app.post(
     "/dialogs",
     response_model=schemas.DialogResponse,
@@ -75,7 +84,7 @@ async def create_dialog(
 ):
     return await crud.create_dialog(db, current_user.user_id, payload.name)
 
-# Добавить сообщение к диалогу
+
 @app.post(
     "/dialogs/{dialog_id}/messages",
     response_model=schemas.MessageResponse,
@@ -91,7 +100,7 @@ async def create_message_in_dialog(
     # можно проверить, что dialog.user_id == current_user.user_id
     return await crud.create_message(db, payload)
 
-# Получить все сообщения в диалоге
+
 @app.get(
     "/dialogs/{dialog_id}/messages",
     response_model=List[schemas.MessageResponse],
@@ -104,6 +113,8 @@ async def read_messages_in_dialog(
     return await crud.get_messages_by_dialog(db, dialog_id)
 
 # Получить все диалоги пользователя
+
+
 @app.get(
     "/dialogs",
     response_model=List[schemas.DialogResponse],
@@ -115,6 +126,8 @@ async def read_dialogs_for_user(
     return await crud.get_dialogs_by_user(db, current_user.user_id)
 
 # Получить все сообщения пользователя
+
+
 @app.get(
     "/users/me/messages",
     response_model=List[schemas.MessageResponse],
@@ -125,3 +138,39 @@ async def read_messages_for_current_user(
     db: AsyncSession = Depends(get_db)
 ):
     return await crud.get_messages_by_user(db, current_user.user_id)
+
+
+@app.put(
+    "/dialogs/{dialog_id}/messages/{message_id}",
+    response_model=schemas.MessageResponse
+)
+async def edit_message(
+    dialog_id: int,
+    message_id: int,
+    payload: schemas.MessageCreate,
+    current_user: models.User = Security(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    # Проверка: payload.dialog_id должен совпадать с URL
+    if payload.dialog_id != dialog_id:
+        raise HTTPException(status_code=400, detail="dialog_id mismatch")
+    # Вызываем CRUD-операцию обновления
+    return await crud.update_message_text(
+        db,
+        message_id=message_id,
+        new_text=payload.text,
+        current_user_id=current_user.user_id
+    )
+
+
+@app.delete(
+    "/dialogs/{dialog_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    responses={404: {"description": "Not Found"}, 403: {"description": "Forbidden"}}
+)
+async def remove_dialog(
+    dialog_id: int,
+    current_user: models.User = Security(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    await crud.delete_dialog(db, dialog_id, current_user.user_id)

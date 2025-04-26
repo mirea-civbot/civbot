@@ -1,15 +1,16 @@
 from typing import List, Optional
 
-from sqlalchemy import select
+from sqlalchemy import select, delete
 from sqlalchemy.exc import IntegrityError
+from fastapi import FastAPI, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 import models
 import schemas
 from auth import get_password_hash
 
 
-# ─── User CRUD ────────────────────────────────────────────────────────────────
 async def get_user_by_email(db: AsyncSession, email: str) -> Optional[models.User]:
     stmt = select(models.User).where(models.User.email == email)
     result = await db.execute(stmt)
@@ -20,6 +21,7 @@ async def get_user_by_name(db: AsyncSession, name: str) -> Optional[models.User]
     stmt = select(models.User).where(models.User.name == name)
     result = await db.execute(stmt)
     return result.scalar_one_or_none()
+
 
 async def create_user(db: AsyncSession, user_in: schemas.UserCreate) -> models.User:
     hashed_password = get_password_hash(user_in.password)
@@ -38,16 +40,17 @@ async def create_user(db: AsyncSession, user_in: schemas.UserCreate) -> models.U
     return db_user
 
 
-# ─── Dialog CRUD ──────────────────────────────────────────────────────────────
 async def get_dialogs_by_user(db: AsyncSession, user_id: int) -> List[models.Dialog]:
     stmt = select(models.Dialog).where(models.Dialog.user_id == user_id).order_by(models.Dialog.created_at)
     result = await db.execute(stmt)
     return result.scalars().all()
 
+
 async def get_dialog_by_id(db: AsyncSession, dialog_id: int) -> Optional[models.Dialog]:
     stmt = select(models.Dialog).where(models.Dialog.dialog_id == dialog_id)
     result = await db.execute(stmt)
     return result.scalar_one_or_none()
+
 
 async def create_dialog(db: AsyncSession, user_id: int, name: str) -> models.Dialog:
     db_dialog = models.Dialog(user_id=user_id, name=name)
@@ -57,7 +60,6 @@ async def create_dialog(db: AsyncSession, user_id: int, name: str) -> models.Dia
     return db_dialog
 
 
-# ─── Message CRUD ─────────────────────────────────────────────────────────────
 async def get_messages_by_dialog(db: AsyncSession, dialog_id: int) -> List[models.Message]:
     stmt = (
         select(models.Message)
@@ -66,6 +68,7 @@ async def get_messages_by_dialog(db: AsyncSession, dialog_id: int) -> List[model
     )
     result = await db.execute(stmt)
     return result.scalars().all()
+
 
 async def create_message(
     db: AsyncSession,
@@ -83,7 +86,6 @@ async def create_message(
     return db_msg
 
 
-# ─── Message Review CRUD ─────────────────────────────────────────────────────
 async def get_user_review(
     db: AsyncSession,
     message_id: int,
@@ -95,6 +97,7 @@ async def get_user_review(
     )
     result = await db.execute(stmt)
     return result.scalar_one_or_none()
+
 
 async def create_message_review(
     db: AsyncSession,
@@ -119,7 +122,6 @@ async def create_message_review(
     return db_review
 
 
-# ─── Dialog Share CRUD ────────────────────────────────────────────────────────
 async def create_dialog_share(db: AsyncSession, dialog_id: int) -> models.DialogShare:
     db_share = models.DialogShare(dialog_id=dialog_id)
     db.add(db_share)
@@ -127,10 +129,12 @@ async def create_dialog_share(db: AsyncSession, dialog_id: int) -> models.Dialog
     await db.refresh(db_share)
     return db_share
 
+
 async def get_dialog_share(db: AsyncSession, share_id: int) -> Optional[models.DialogShare]:
     stmt = select(models.DialogShare).where(models.DialogShare.share_id == share_id)
     result = await db.execute(stmt)
     return result.scalar_one_or_none()
+
 
 async def get_messages_by_user(db: AsyncSession, user_id: int) -> list[models.Message]:
     stmt = (
@@ -141,3 +145,47 @@ async def get_messages_by_user(db: AsyncSession, user_id: int) -> list[models.Me
     )
     result = await db.execute(stmt)
     return result.scalars().all()
+
+
+async def get_message_by_id(
+    db: AsyncSession,
+    message_id: int
+) -> Optional[models.Message]:
+    stmt = (
+        select(models.Message)
+        .options(selectinload(models.Message.dialog))  # Явная загрузка диалога
+        .where(models.Message.message_id == message_id)
+    )
+    result = await db.execute(stmt)
+    return result.scalar_one_or_none()
+
+
+async def update_message_text(
+    db: AsyncSession,
+    message_id: int,
+    new_text: str,
+    current_user_id: int
+) -> models.Message:
+    message = await get_message_by_id(db, message_id)
+    if not message:
+        raise HTTPException(status_code=404, detail="Message not found")
+    # Теперь dialog будет загружен благодаря selectinload
+    if message.dialog.user_id != current_user_id:
+        raise HTTPException(status_code=403, detail="Not allowed to edit this message")
+    message.text = new_text
+    await db.commit()
+    await db.refresh(message)
+    return message
+
+
+async def delete_dialog(db: AsyncSession, dialog_id: int, current_user_id: int) -> None:
+    # Убедимся, что диалог существует и принадлежит пользователю
+    dialog = await get_dialog_by_id(db, dialog_id)
+    if not dialog:
+        raise HTTPException(status_code=404, detail="Dialog not found")
+    if dialog.user_id != current_user_id:
+        raise HTTPException(status_code=403, detail="Not allowed to delete this dialog")
+    # Удалим диалог (сообщения удалятся по каскаду)
+    stmt = delete(models.Dialog).where(models.Dialog.dialog_id == dialog_id)
+    await db.execute(stmt)
+    await db.commit()
