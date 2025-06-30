@@ -10,6 +10,7 @@ from fastapi import status
 import auth
 from jose import JWTError, jwt
 from app_config import settings
+from LLM_model import LLMService
 
 app = FastAPI(debug=True)
 
@@ -56,7 +57,6 @@ async def register(
         raise HTTPException(400, "Email already registered")
     return await crud.create_user(db, user)
 
-# Логин -> выдача JWT
 
 
 @app.post("/login")
@@ -69,8 +69,6 @@ async def login(
         raise HTTPException(401, "Invalid credentials")
     token = auth.create_access_token({"sub": user.email})
     return {"access_token": token, "token_type": "bearer"}
-
-# Создать диалог (авторизованный пользователь)
 
 
 @app.post(
@@ -95,10 +93,42 @@ async def create_message_in_dialog(
     current_user: models.User = Security(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
+    # 1. Проверка совпадения dialog_id
     if payload.dialog_id != dialog_id:
         raise HTTPException(400, "dialog_id mismatch")
-    # можно проверить, что dialog.user_id == current_user.user_id
-    return await crud.create_message(db, payload)
+
+    # 2. Проверка прав доступа к диалогу
+    dialog = await crud.get_dialog_by_id(db, dialog_id)
+    if not dialog:
+        raise HTTPException(404, "Dialog not found")
+    if dialog.user_id != current_user.user_id:
+        raise HTTPException(403, "Access denied")
+
+    # 3. Сохраняем сообщение пользователя
+    user_message = await crud.create_message(
+        db, 
+        msg_in=payload, 
+        is_bot=False
+    )
+
+    # 4. Генерируем ответ бота
+    model = LLMService()
+    bot_response_text = await model.generate_response(
+        user_input=user_message.text,
+        history=await crud.get_messages_by_dialog(db, dialog_id)
+    )
+
+    # 5. Сохраняем ответ бота
+    bot_message = await crud.create_message(
+        db,
+        msg_in=schemas.MessageCreate(
+            text=bot_response_text,
+            dialog_id=dialog_id
+        ),
+        is_bot=True
+    )
+
+    return bot_message
 
 
 @app.get(
@@ -111,8 +141,6 @@ async def read_messages_in_dialog(
     db: AsyncSession = Depends(get_db)
 ):
     return await crud.get_messages_by_dialog(db, dialog_id)
-
-# Получить все диалоги пользователя
 
 
 @app.get(
@@ -151,10 +179,8 @@ async def edit_message(
     current_user: models.User = Security(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    # Проверка: payload.dialog_id должен совпадать с URL
     if payload.dialog_id != dialog_id:
         raise HTTPException(status_code=400, detail="dialog_id mismatch")
-    # Вызываем CRUD-операцию обновления
     return await crud.update_message_text(
         db,
         message_id=message_id,
@@ -174,3 +200,16 @@ async def remove_dialog(
     db: AsyncSession = Depends(get_db)
 ):
     await crud.delete_dialog(db, dialog_id, current_user.user_id)
+
+
+@app.delete(
+    "/dialogs/{dialogs_id}/messages/{messages_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    responses={404: {"description": "Not Found"}, 403: {"description": "Forbidden"}}
+)
+async def delete_message(
+    message_id: int,
+    current_user: models.User = Security(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    await crud.delete_message(message_id=message_id, db=db, current_user_id=current_user.user_id)

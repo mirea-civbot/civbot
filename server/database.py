@@ -24,7 +24,3 @@ async_session = async_sessionmaker(
 
 # базовый класс для моделей
 Base = declarative_base()
-Base.metadata.drop_all(bind=engine)
-
-# Создайте все таблицы заново
-Base.metadata.create_all(bind=engine)

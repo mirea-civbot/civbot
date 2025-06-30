@@ -11,6 +11,7 @@ import schemas
 from auth import get_password_hash
 
 
+
 async def get_user_by_email(db: AsyncSession, email: str) -> Optional[models.User]:
     stmt = select(models.User).where(models.User.email == email)
     result = await db.execute(stmt)
@@ -122,7 +123,12 @@ async def create_message_review(
     return db_review
 
 
-async def create_dialog_share(db: AsyncSession, dialog_id: int) -> models.DialogShare:
+async def create_dialog_share(db: AsyncSession, dialog_id: int, current_user_id: int) -> models.DialogShare:
+    dialog = await get_dialog_by_id(db, dialog_id=dialog_id)
+    if not dialog:
+        raise HTTPException(status_code=404, detail="Dialog not found")
+    if dialog.user_id != current_user_id:
+        raise HTTPException(status_code=403, detail="Not allowed to share this dialog")
     db_share = models.DialogShare(dialog_id=dialog_id)
     db.add(db_share)
     await db.commit()
@@ -169,7 +175,6 @@ async def update_message_text(
     message = await get_message_by_id(db, message_id)
     if not message:
         raise HTTPException(status_code=404, detail="Message not found")
-    # Теперь dialog будет загружен благодаря selectinload
     if message.dialog.user_id != current_user_id:
         raise HTTPException(status_code=403, detail="Not allowed to edit this message")
     message.text = new_text
@@ -189,3 +194,15 @@ async def delete_dialog(db: AsyncSession, dialog_id: int, current_user_id: int) 
     stmt = delete(models.Dialog).where(models.Dialog.dialog_id == dialog_id)
     await db.execute(stmt)
     await db.commit()
+
+
+async def delete_message(db: AsyncSession, message_id: int, current_user_id: int) -> int:
+    message = await get_message_by_id(db, message_id)
+    if not message:
+        raise HTTPException(status_code=404, detail="Message not found")
+    if message.dialog.user_id != current_user_id:
+        raise HTTPException(status_code=403, detail="Not allowed to delete this message")
+    stmt = delete(models.Message).where(models.Message.message_id == message_id)
+    await db.execute(stmt)
+    await db.commit()
+
