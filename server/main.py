@@ -10,7 +10,9 @@ from fastapi import status
 import auth
 from jose import JWTError, jwt
 from app_config import settings
-from LLM_model import LLMService
+from pydantic import Extra
+from llama_index.core import Settings
+from LLM_model import RAGService
 
 app = FastAPI(debug=True)
 
@@ -111,9 +113,8 @@ async def create_message_in_dialog(
         is_bot=False
     )
 
-    # 4. Генерируем ответ бота
-    model = LLMService()
-    bot_response_text = await model.generate_response(
+    model = RAGService()
+    bot_response_text = await model.retrieve_and_generate(
         user_input=user_message.text,
         history=await crud.get_messages_by_dialog(db, dialog_id)
     )
@@ -126,7 +127,7 @@ async def create_message_in_dialog(
             dialog_id=dialog_id
         ),
         is_bot=True
-    )
+    )   
 
     return bot_message
 
